@@ -1,0 +1,6 @@
+image_pairs:       image_pairs
+rlks:              1
+azlks:             1
+DEM:               DEM
+ref_slc:           20090808
+threshold:         1

@@ -1,0 +1,36 @@
+
+##################
+# Part 1: 原始数据处理
+dims_op_oc_dfd2_615526494_1.tar.gz
+dims_op_oc_dfd2_615526494_2.tar.gz
+dims_op_oc_dfd2_615526494_3.tar.gz
+dims_op_oc_dfd2_615526494_4.tar.gz
+...
+# 将数据进行解压，与原始数据放至ZIP目录下
+dims_op_oc_dfd2_615526494_1
+dims_op_oc_dfd2_615526494_2
+dims_op_oc_dfd2_615526494_3
+dims_op_oc_dfd2_615526494_4
+
+2.数据提取
+# 批量数据提取,rslc数据存放至SLC文件夹下以日期命名
+bash TSX_raw2slc ZIP
+
+3.数据裁减
+# 生成数据列表,删除列表中日期外的文件
+cd SLC
+ls >dates
+
+4.数据批量裁减
+run_all.pl dates 'SLC_copy $1/$1.rslc $1/$1.rslc.par $1/$1.slc $1/$1.slc.par - - 4500 7000 2000 8000'
+
+
+对比裁减
+
+run_all.pl dates 'SLC_copy $1/$1.rslc $1/$1.rslc.par $1/$1.slc $1/$1.slc.par - - 4500 3000 7000 3000'
+
+# # # # # # # # ## # # # # # # # ## # # # # # # # ## # # # # # # # ## # # # # # # # ## # # # # # # # #
+#DEM的数据的准备，获取30米分辨率的DEM数据放置SRTM文件夹，tif格式或者hgt格式
+
+srtm2dem 
+

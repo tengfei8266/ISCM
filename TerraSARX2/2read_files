@@ -1,0 +1,240 @@
+#!/bin/bash
+##########################################################
+# Script that:
+#       - read the selected images  
+#       
+# Written by Lei Zhang, 02-03-2008
+# LSGI, The Hong Kong PolyU
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to read the selected data v3.0"
+echo   "03-25-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 5 ]; then
+  echo "usage: `basename $0` <data_path> <images> <rlks> <azlks> <project_name> "
+  echo ""
+  echo "input parameters:"
+  echo "data_path          1.the folder containing the data to be processed"
+  echo "images             2.the file containing names of the selected images"
+  echo "rlks               3.number of range looks for plotting the figure"
+  echo "azlks              4.number of azimuth looks for plotting the figure"
+  echo "project_name       5.the project name (e.g. HK_Airport)"
+  echo ""
+  echo "Make sure the data have been put into the sub folders named respectively."
+  echo "Make sure your SLC data are stored with the name of yyyymmdd!!"
+  echo "No blanks are allowed in the project name"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+# get current dir
+work_path=`pwd`
+#get the data path
+data_path=$work_path/$1
+if [ ! -d $data_path ]; then
+data_path=$1
+fi
+#########################
+images=$2
+# get the data
+dirs=$(awk '{print $1}' $images)
+dirs=$(echo $dirs)	# get all in a line
+#############################
+# gett the mutilooks
+rlks=$3
+azlks=$4
+#########################
+project_name=$5
+WORKDIR=$PWD/$project_name
+SLC_DATA=$WORKDIR/SLC_DATA
+RE_SLAVES=$WORKDIR/RE_SLAVES
+PRODUCT=$WORKDIR/PRODUCT
+FIGURES=$WORKDIR/FIGURES
+DEM_GEO=$WORKDIR/DEM_GEO
+TCP=$WORKDIR/TCP
+M_Ss=$WORKDIR/M_Ss
+
+# Workdir for TCPInSAR
+if [ ! -d $WORKDIR ]; then
+  mkdir $WORKDIR
+  echo "${bn}: ***INFO***    workdir: $WORKDIR created."
+fi
+# Output directory for resampled slaves
+if [ ! -d $RE_SLAVES ]; then
+mkdir $RE_SLAVES
+echo "${bn}: ***INFO***    workdir: $RE_SLAVES created."
+fi
+ 
+# Output directory for data.
+if [ ! -d $SLC_DATA ]; then
+  mkdir $SLC_DATA
+echo "${bn}: ***INFO***    workdir: $SLC_DATA created."
+fi
+# Output directory for image pairs
+if [ ! -d $PRODUCT ]; then
+  mkdir $PRODUCT
+echo "${bn}: ***INFO***    workdir: $PRODUCT created."
+fi
+# Output directory for results
+if [ ! -d $FIGURES ]; then
+  mkdir $FIGURES
+fi
+# Output directory for geocoding external DEM
+if [ ! -d $DEM_GEO ]; then
+  mkdir $DEM_GEO
+echo "${bn}: ***INFO***    workdir: $DEM_GEO created."
+fi
+
+
+# Output directory for selected TCPs
+if [ ! -d $TCP ]; then
+  mkdir $TCP
+echo "${bn}: ***INFO***    workdir: $TCP created."
+fi
+
+
+# Workdir for TCPInSAR
+if [ ! -d $M_Ss ]; then
+  mkdir $M_Ss
+  echo "${bn}: ***INFO***    workdir: $M_Ss created."
+fi
+
+for dir in $dirs
+do
+	image=$dir
+	data=$SLC_DATA/$image.slc
+	par=$SLC_DATA/$image.slc.par	
+## check whether the data exist or not...
+if [ ! -e $data ]; then
+       cd $data_path/$image
+### read data according to the types
+for file in `ls *`
+do
+case $file in
+	p*.slc.par)
+	     echo -n "input files are MSP processed data... "
+	     echo " "
+	     echo -n "Reading the data ..."
+	     echo " "
+	     ln -s $data_path/$image/*.slc $data
+            # chmod 777 $data
+             par_MSP sensor.par p$image.slc.par $par
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading data" "${image}"
+             echo "----------------------------------------------------------------"
+	     break
+             ;;
+           *.slc.par)
+	     echo -n "input files are slc files... "
+	     echo " "
+	     echo -n "Reading the data ..."
+	     echo " "
+	     ln -s $data_path/$image/*.slc $data
+            # chmod 777 $data
+             cp $image.slc.par $par
+             break
+             ;;
+	 LED*)
+	     echo -n "input files are PALSAR SLC data... "
+	     echo " "
+	     par_EORC_PALSAR LED* $par IMG-HH* $data
+	    
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading  data" "${image}"
+             echo "----------------------------------------------------------------"
+             break
+	     ;;
+	IMG-HV*)
+             echo -n "input files are PALSAR SLC HV data... "
+	     echo " "
+             par_EORC_PALSAR LED* $par IMG-HV* $data
+	    
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading  data" "${image}"
+             echo "----------------------------------------------------------------"
+             break
+	     ;;
+	 lea_01.001)
+	     echo -n "input files are ESA ERS SLC data... "
+	     echo " "
+	     echo -ne "$image" > creat_par 
+	     par_ESA_ERS lea_01.001 $par dat_01.001 $data < creat_par
+             rm -f creat_par
+	     sensor=`awk '$1 == "sensor:" {print $2}' $par`
+             case $sensor in
+             ERS1)
+	     DELFT_vec2 $par $O_DIR_ERS1                 
+             ;;
+             ERS2)
+             DELFT_vec2 $par $O_DIR_ERS2          
+             ;;
+             esac     
+	     
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading data" "${image}"
+             echo "---------------------------------------------------------------- "
+             break
+	     ;;
+	 AS*)
+	     echo -n "input files are ESA ASAR SLC data... "
+	     echo " "
+	     par_ASAR ASA_IMS*.N1 $image
+	     mv -f *VV.SLC $data
+	     mv -f *VV.SLC.par $par
+             #DELFT_vec2 $par $O_DIR_ENVI
+	     DORIS_vec $par DOR*
+	    
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading  data" "${image}"
+             echo "----------------------------------------------------------------"
+             break
+	     ;;
+	 *.led)
+	     echo -n "input files are Radarsat SLC data... "
+	     echo " "
+	     par_RSAT_SLC *.led $par *.img $data
+            
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading data" "${image}"
+             echo "---------------------------------------------------------------- "
+	     break
+	     ;;
+	 *.DAT)
+	     echo -n "input files are JERS SLC data... "
+	     echo " "
+	     par_NASDA_JERS *.DAT $image
+	     mv -f *.SLC $data
+	     mv -f *.par $par
+	    
+             echo "----------------------------------------------------------------"
+             echo                  "end of reading data" "${image}"
+             echo "---------------------------------------------------------------- "
+             break
+	     ;;
+esac
+done
+fi
+
+# get the data_type
+image_format=`awk '$1 == "image_format:" {print $2}' $par`
+	     case $image_format in
+             SCOMPLEX)
+	     data_type="1"              
+             ;;
+             FCOMPLEX)
+             data_type="0"       
+             ;;
+             esac     
+
+start="1"
+nlines="0"
+scale="1"
+exp=".35"
+mirror="1"
+hdrsz="0"     #line header size in bytes (default=0, ESA PAFs use 12 for SLC products)
+width=`awk '$1 == "range_samples:" {print $2}' $par`
+#rasSLC $data $width $start $nlines $rlks $azlks $scale $exp $mirror $data_type $hdrsz $SLC_DATA/$image.ras
+done	
+

@@ -1,0 +1,90 @@
+#!/bin/sh   COPY/Sentinel1/rslc_prep/
+#!Eg: 20170328.rslc.deramp.crop/20170328.rslc.deramp.crop.par to SLC/20170328
+
+   bash 1cal_base SLC 1 150 500
+
+#!  ls * >images / 20170328 20170421...
+#利用时空基线阈值保留干涉对
+awk '{if (-$3<400 && $3<400 && $4<80) print $0}' baseline > image_pairs 
+
+   bash 2read_files SLC images 1 1 file
+
+   bash 3coregistration images 20090808 1 1 1 - - - -
+ #进入M_Ss执行查看所有配准结果
+
+   bash 41products_int image_pairs 1  1 DEM 20090808 0
+
+   bash 42products_dem image_pairs 1  1  DEM 20090808 1
+
+   bash 43products_diff image_pairs 1 1  DEM 20090808 2
+
+   bash 6diff_mcf image_pairs 1 1  0.45 0 3849 4203
+
+#地理编码
+#首先对DEM进行地理编码，将数据由SAR坐标系转到地理坐标系。
+geocode_back file/DEM_GEO/20090808.dem.final 7000 file/DEM_GEO/20090808.lookup_table_final file/DEM_GEO/20090808geo.dem.final 12089 
+
+rasdt_pwr 20090808geo.dem.final 20090808.dem.cropped 12089 - - - - - - 2 rmg.cm 20090808.geohgt.bmp - - 8
+#强度地理编码
+run_all.pl images 'geocode_back file/PRODUCT/$1.mli 7000 file/DEM_GEO/20090808.lookup_table_final file/PRODUCT/$1.geo.mli 12089'
+
+#CC地理编码
+run_all.pl imagepairs 'geocode_back file/PRODUCT/$1.tflt.cc 7000 file/DEM_GEO/20090808.lookup_table_final file/PRODUCT/$1.geo.tflt.cc 12089'
+
+#解缠地理编码
+run_all.pl imagepairs 'geocode_back file/PRODUCT/unw/$1.final.unw1 7000 file/DEM_GEO/20090808.lookup_table_final file/PRODUCT/unw/$1.geo.final.unw1 12089'
+
+####################################################################################################
+##############利用MASK.bmp或者unw1.bmp挑选完干涉对后，执行以下操作再利用MATLAB进行后续处理#############
+####################################################################################################
+
+######通过.bmp文件读取已挑选干涉对cc/unw/主影像mli的文件名(cc_unw1_mli_table)，用于matlab直接读取#######
+for file in `find . -name "*.bmp"`
+do      
+    fn1=`echo ${file:2:17}`
+    fn2=`echo ${file:2:8}`
+    echo $fn1.tflt.cc $fn1.final.unw1 $fn2.mli >> cc_unw1_mli_table
+    sort cc_unw1_mli_table -o cc_unw1_mli_table
+done
+##################读取挑选后的影像(N_images)，确定最终参与了干涉的影像数N###################
+for file in `find . -name "*.bmp"`
+do      
+    fn1=`echo ${file:2:8}`
+    fn2=`echo ${file:11:8}`
+    echo $fn1 >> selected_images
+    echo $fn2 >> selected_images
+done
+sort -n selected_images | uniq >> N_images
+rm selected_images
+####################生成干涉对列表(M_pairs)，为干涉对编号做准备####################
+for file in `find . -name "*.bmp"`
+do      
+    fn1=`echo ${file:2:8}`
+    fn2=`echo ${file:11:8}`
+    echo $fn1 $fn2 >> M_pairs
+done
+sort M_pairs -o M_pairs
+####################给所有影像按时间顺序从0编号(N_images_number)，用于matlab建立B矩阵####################
+# N=`awk 'END {print NR}' N_images`
+for i in {0..21}
+do
+    echo -ne "$i\n" >> number
+done
+paste N_images number > N_images_number
+rm number
+####################计算每景影像相对于第一景的时间基线，用于matlab建立TT矩阵(N_images number)####################
+bash TT.sh
+#########根据.bmp和image_pairs文件读取已挑选干涉对的空间基线与时间基线########
+cp ../../image_pairs image_pairs
+for file in `find . -name "*.bmp"`
+do      
+    fn1=`echo ${file:2:17}`
+    echo $fn1 >> pairs
+    sort pairs -o pairs
+done
+run_all.pl pairs 'grep "$1" image_pairs >> baseline'
+rm pairs
+rm image_pairs
+
+
+

@@ -1,0 +1,56 @@
+#!/bin/sh
+##########################################################
+# Script that:
+#       - Generate slc for zipped raw data for TanDEM
+#       
+# 
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: Generate slc for zipped raw data for TanDEM"
+echo   ""
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 1 ]; then
+   echo "usage: `basename $0` <raw_path>"
+   echo ""
+   echo "input parameter:"
+   echo "raw_path            the path of the zipped raw data for TanDEM"
+   echo "Make sure the files in raw_path are zipped"
+   echo ""
+   exit 0
+fi
+work_path=`pwd`
+raw_path=$work_path/$1
+SLC_path=$work_path/SLC
+if [ ! -d $SLC_path ]; then
+   mkdir $SLC_path
+fi
+if [ ! -d $raw_path ]; then
+   raw_path=$1
+fi
+cd $raw_path
+ls -d dims* >list_raw
+dirs=$(awk -F '.' '{print $1}' list_raw)
+dirs=$(echo $dirs)
+#rm list_raw
+TSX_dir="TSX-1.SAR.L1B"
+for name in $dirs
+   do
+   cd $raw_path
+   #tar -zxvf $name.tar.gz
+   cd $raw_path/$name/$TSX_dir/T?X*
+      xml_name=`ls *.xml`
+      slc_date=`echo $xml_name | awk '{print substr($1,29,8)}'`
+      slc_dir=$SLC_path/$slc_date
+      if [ ! -d $slc_dir ]; then
+         mkdir $slc_dir
+      fi
+   par_TX_SLC $xml_name IMAGEDATA/*.cos $slc_dir/${slc_date}.rslc.par $slc_dir/${slc_date}.rslc
+done
+cd $work_path
+
+
+
+
+

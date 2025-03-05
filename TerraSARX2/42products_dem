@@ -1,0 +1,260 @@
+#!/bin/bash
+##########################################################
+# Script that:
+#       - generates the diff phases 
+#       
+# Written by Changjiang Yang, 02-24-2017
+# CSU, The Cetral South University
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to generate the interf. products"
+echo   "03-28-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 5 ]; then
+  echo "usage: `basename $0` <image_pairs> <rlks> <azlks> <DEM> <ref_slc> <mode> <threshold>"
+  echo ""
+  echo "input parameters:"
+  echo "image_pairs        the file containing names of the selected image pairs"
+  echo "rlks               number of range looks for plotting the figure"
+  echo "azlks              number of azimuth looks for plotting the figure"
+  echo "DEM                DEM (WGS84) path (make sure it only contains DEM and its par file)"
+  echo "ref_slc            the name of reference SLC"
+  echo "mode               processing mode"
+  echo "                   0: interferometry processing"
+  echo "                   1: geocode DEM to RDC system and generate the lookup table"
+  echo "                   2: perform 0 and 1 and two pass DInSAR (default)"
+  echo "                   3: if mode 2 fails due to the incorrected result of topographic removal, use mode 3"
+  echo "threshold          a threshold used for checking the quality of the intef. (smoothed) (0.05 default)"
+  echo "Make sure the DEM folder only contains DEM and the par file"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+image_pairs=$1
+dirs=$(awk '{print $1}' $image_pairs)
+#dirs=$(awk '{print $1}' p_t)
+dirs=$(echo $dirs)	# get all in a line
+
+##### get input
+rm products.par
+echo "image_pairs:       $1" >> products.par
+echo "rlks:              $2" >> products.par
+echo "azlks:             $3" >> products.par
+echo "DEM:               $4" >> products.par
+echo "ref_slc:           $5" >> products.par
+echo "threshold:         $6" >> products.par
+##########
+
+rlks=$2
+azlks=$3
+#######################
+mode="2"
+if [ $# -ge 6 ]; then
+mode=$6
+fi
+#######################
+
+#######################
+qc_v="0.2"
+if [ $# -ge 7 ]; then
+qc_v=$7
+fi
+#######################
+
+work_path=`pwd`
+#get the project name
+#p_name=`du -s * | sort -nr | head -1 | awk '{print $2}'`
+#p_name=$(dirname `find */DEM_GEO` )
+p_name=$(dirname `find */DEM_GEO | head -1` )
+re_slaves=$work_path/$p_name/RE_SLAVES
+product=$work_path/$p_name/PRODUCT
+FIGURES=$work_path/$p_name/FIGURES
+qc=$work_path/$p_name/QC
+# Output directory for image pairs
+if [ ! -d $product ]; then
+  mkdir $product
+echo "${bn}: ***INFO***    workdir: $product created."
+fi
+
+if [ ! -d $qc ]; then
+  mkdir $qc
+echo "${bn}: ***INFO***    workdir: $qc created."
+fi
+dem_path=$work_path/$p_name/DEM_GEO
+
+
+# mkdir DEM
+DEM_path=$4
+ref_slc=$5
+ref_slc_par=$ref_slc.rslc.par
+master_slc_par=$re_slaves/$ref_slc_par
+master=$ref_slc
+cd $DEM_path
+   if [ ! -f *.dem -a ! -f *.dem.par ]; then
+      latitude=`awk '$1=="center_latitude:" {print $2}' $master_slc_par`
+      longitude=`awk '$1=="center_longitude:" {print $2}' $master_slc_par`
+      latitude=`echo $latitude | awk '{printf("%.2f\n",$0)}'`
+      longitude=`echo $longitude | awk '{printf("%.2f\n",$0)}'`
+      up="1"
+      down="1"
+      max_lat=`echo $latitude+$up|bc`
+      min_lat=`echo $latitude-$down|bc`
+      max_lon=`echo $longitude+$up|bc`
+      min_lon=`echo $longitude-$down|bc`
+      #cd $DEM_path
+      Construction_SRTM_30m $max_lat $min_lat $max_lon $min_lon 2
+      mv $DEM_path/dem/final_dem.dem $DEM_path/final_dem.dem
+      mv $DEM_path/dem/final_dem.dem.par $DEM_path/final_dem.dem.par
+     # cd $slc_path
+    
+   fi
+ cd ..
+
+
+DEM_GEO=$work_path/$p_name/DEM_GEO
+#DEM_input=`du -s $DEM_path/* | sort -nr | head -1 | awk '{print $2}'`
+#DEM_input_par=`ls $DEM_path/*.par`
+DEM_input=$work_path/$DEM_path/*.dem
+DEM_input_par=$work_path/$DEM_path/*.dem.par
+m_slc_input=$re_slaves/$master.rslc
+m_slc_input_par=$m_slc_input.par
+LOG=$DEM_GEO/$ref_slc.dem.log
+#echo $DEM_input
+
+#echo $DEM_input_par
+#----------output files
+m_mli=$DEM_GEO/$master.mli
+m_mli_par=$DEM_GEO/$master.mli.par
+DEM_seg=$DEM_GEO/$master.dem.cropped
+DEM_seg_par=$DEM_GEO/$master.dem.cropped.par
+sim_sar=$DEM_GEO/$master.sim_sar
+lookup_table=$DEM_GEO/$master.rough_rdc
+sim_sar_geo=$DEM_GEO/$master.sim_sar_geocode
+dem_final=$DEM_GEO/$master.dem.final
+diff_par_geo=$DEM_GEO/$master.diff.geo.par
+lookup_table_final=$DEM_GEO/$master.lookup_table_final
+croped_dem_ras=$DEM_GEO/$master.cropped_dem.bmp
+geocoded_sim_sar_ras=$DEM_GEO/$master.sim_sar_rough.bmp
+m_mli_ras=$DEM_GEO/$master.mli.bmp
+m_mli_eqa_ras=$DEM_GEO/$master.eqa.bmp
+hgt_ras=$DEM_GEO/$master.hgt.bmp
+##########################################
+if [ ! -e $lookup_table_final ]; then
+#----------------------------------------------------------------------------------------------
+#   -------------------------------------------------------------------------------------------
+#   generate MLI images
+#   -------------------------------------------------------------------------------------------
+if [ ! -e $m_mli ]; then
+echo "multi_look $m_slc_input $m_slc_input_par $m_mli $m_mli_par $rlks $azlks"
+multi_look $m_slc_input $m_slc_input_par $m_mli $m_mli_par $rlks $azlks >> $LOG
+fi
+
+# calculate the lat_ovr lon_ovr
+r_space=`awk '$1 == "range_pixel_spacing:" {print $2}' $m_mli_par`
+az_space=`awk '$1 == "azimuth_pixel_spacing:" {print $2}' $m_mli_par`
+inc_angle=`awk '$1 == "incidence_angle:" {print $2}' $m_mli_par`
+ground_r_space=$(echo "scale=3;$r_space/s($inc_angle*3.1415926/180)"|bc -l)
+degree2meter="108000"
+res_lat_m=`awk '$1 == "post_lat:" {print sqrt($2*$2)*'$degree2meter'}' $DEM_input_par`
+res_lon_m=`awk '$1 == "post_lon:" {print sqrt($2*$2)*'$degree2meter'}' $DEM_input_par`
+#res_lat_m=$(echo "scale=3;$res_lon*$degree2meter"|bc -l)
+#res_lon_m=$(echo "scale=3;$res_lon*$degree2meter"|bc -l)
+lat_ovr=`printf "%.0f\n" $(echo "scale=3;$res_lat_m/$az_space"|bc)`
+lon_ovr=`printf "%.0f\n" $(echo "scale=3;$res_lon_m/$ground_r_space"|bc)`
+echo $lat_ovr
+echo $lon_ovr
+#lat_ovr="2"
+#lon_ovr="2"
+## just in case...
+if [ "$lat_ovr" = "0" ]
+then
+lat_ovr="8"
+fi
+if [ "$lon_ovr" = "0" ]
+then
+lon_ovr="8"
+fi
+echo $lat_ovr >lat_lon_ovr
+echo $lon_ovr >>lat_lon_ovr
+#   -------------------------------------------------------------------------------------------
+#   geocoding DEM to Radar coordinate
+#   -------------------------------------------------------------------------------------------
+
+#######################################################################################
+###   Geocode with orbit data and simulate                                          ###
+###   a SAR intensity image from the DEM                                            ###
+#######################################################################################
+rm -f $DEM_seg_par
+echo "gc_map $m_mli_par - $DEM_input_par $DEM_input $DEM_seg_par $DEM_seg $lookup_table $lat_ovr $lon_ovr $sim_sar"
+gc_map $m_mli_par - $DEM_input_par $DEM_input $DEM_seg_par $DEM_seg $lookup_table $lat_ovr $lon_ovr $sim_sar $DEM_GEO/$master.u $DEM_GEO/$master.v $DEM_GEO/$master.inc $DEM_GEO/$master.psi $DEM_GEO/$master.pix $DEM_GEO/$master.ls_map 8 2>> $LOG
+width_new_dem=`awk '$1=="width:" {print $2}' $DEM_seg_par`
+col_post=`awk '$1=="post_lat:" {print $2}' $DEM_seg_par`
+row_post=`awk '$1=="post_lon:" {print $2}' $DEM_seg_par`
+
+rasshd $DEM_seg $width_new_dem $col_post $row_post 1 0 1 1 45. 135 $croped_dem_ras
+#######################################################################################
+###   geocode the simulated SAR intensity image to radar coordinate                 ###
+###                                                                                 ###
+#######################################################################################
+
+width_mli=`awk '$1=="range_samples:" {print $2}' $m_mli_par`
+length_mli=`awk '$1=="azimuth_lines:" {print $2}' $m_mli_par`
+echo "geocode $lookup_table $sim_sar $width_new_dem $sim_sar_geo $width_mli $length_mli 1 0"
+geocode $lookup_table $sim_sar $width_new_dem $sim_sar_geo $width_mli $length_mli 1 0 >> $LOG
+raspwr $sim_sar_geo $width_mli 1 0 1 1 1. .35 gray.cm $geocoded_sim_sar_ras
+      
+#######################################################################################
+###   Compute offset of simulated SAR image to mli image                            ###
+#######################################################################################
+pixel_area $m_mli_par $DEM_seg_par $DEM_seg  $lookup_table $DEM_GEO/$master.ls_map $DEM_GEO/$master.inc $DEM_GEO/$master.pix_sigma0 $DEM_GEO/$master.pix_gamma0
+ echo -ne "$dir\n0 0\n24 24\n128 128\n7\n" > diff_par.in
+ create_diff_par $m_mli_par - $diff_par_geo 1 < diff_par.in
+
+ init_offsetm $m_mli_par $sim_sar_geo $diff_par_geo 1 1
+# use ave to replace the master mli
+m_mli=$product/ave
+# estimation of the registration polynomial using offset_pwrm with few
+# (8x8) large (512x512 pixels) search windows 
+
+#offset_pwrm $m_mli $sim_sar_geo $diff_par_geo offs snr 512 512 offsets 1 80 80 8.0
+#offset_fitm offs snr $diff_par_geo coffs coffsets 8.0 6
+#rm -f offs snr offsets coffs coffsets
+# precision estimation of the registration polynomial using offset_pwrm with many
+# (24x24) smaller search windows (256x256 pixel chips)  
+echo "offset_pwrm $m_mli $sim_sar_geo $diff_par_geo offs snr 64 64 offsets 2 256 256 6.0"
+offset_pwrm $DEM_GEO/$master.pix_sigma0 $m_mli  $diff_par_geo offs snr 32 32 offsets 2 256 256 0.6 >> $LOG
+echo "offset_fitm offs snr $diff_par_geo coffs coffsets 0.7 6"
+offset_fitm offs snr $diff_par_geo coffs coffsets 0.7 4 >> $LOG
+rm -f offs snr offsets coffs coffsets       
+echo "offset_pwrm $m_mli $sim_sar_geo $diff_par_geo offs snr 32 32 offsets 2 256 256 7.0"
+#offset_pwrm $m_mli $sim_sar_geo $diff_par_geo offs snr 256 256 offsets 2 128 128 9.0 >> $LOG
+echo "offset_fitm offs snr $diff_par_geo coffs coffsets 8.0 6"
+#offset_fitm offs snr $diff_par_geo coffs coffsets 9.0 6 >> $LOG
+#rm -f offs snr offsets coffs coffsets
+
+#######################################################################################
+###   Geocode refinement; the look-up table LasVegas.utm_to_rdc contains the final  ###
+###   transformation between utm and sar coordinates                                ###
+#######################################################################################
+echo "gc_map_fine $lookup_table $width_new_dem $diff_par_geo $lookup_table_final 0"
+       gc_map_fine $lookup_table $width_new_dem $diff_par_geo $lookup_table_final 0 >> $LOG
+
+#######################################################################################
+###   Geocode mli image and transform the DEM in SAR geometry for use in 2-pass     ###
+###   differential interferometry (or for ground-control point selection)           ###
+#######################################################################################
+width_new_dem=`awk '$1=="width:" {print $2}' $DEM_seg_par`
+length_new_dem=`awk '$1=="nlines:" {print $2}' $DEM_seg_par`
+width_mli=`awk '$1=="range_samples:" {print $2}' $m_mli_par`
+length_mli=`awk '$1=="azimuth_lines:" {print $2}' $m_mli_par`
+echo "geocode $lookup_table_final $DEM_seg $width_new_dem $dem_final $width_mli $length_mli 2 0" 
+geocode $lookup_table_final $DEM_seg $width_new_dem $dem_final $width_mli $length_mli 2 0 >> $LOG
+rasdt_pwr  $dem_final $m_mli $width_mli - - - - - - 2 rmg.cm $hgt_ras - - 8 
+geocode_back $m_mli $width_mli $lookup_table_final $m_mli.utm $width_new_dem $length_new_dem 7 0 
+
+fi
+################################################################################################
+
+

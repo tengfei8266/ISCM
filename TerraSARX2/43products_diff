@@ -1,0 +1,157 @@
+#!/bin/bash
+##########################################################
+# Script that:
+#       - generates the diff phases 
+#       
+# Written by Changjiang Yang, 02-24-2017
+# CSU, The Cetral South University
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to generate the interf. products"
+echo   "03-28-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 5 ]; then
+  echo "usage: `basename $0` <image_pairs> <rlks> <azlks> <DEM> <ref_slc> <mode> <threshold>"
+  echo ""
+  echo "input parameters:"
+  echo "image_pairs        the file containing names of the selected image pairs"
+  echo "rlks               number of range looks for plotting the figure"
+  echo "azlks              number of azimuth looks for plotting the figure"
+  echo "DEM                DEM (WGS84) path (make sure it only contains DEM and its par file)"
+  echo "ref_slc            the name of reference SLC"
+  echo "mode               processing mode"
+  echo "                   0: interferometry processing"
+  echo "                   1: geocode DEM to RDC system and generate the lookup table"
+  echo "                   2: perform 0 and 1 and two pass DInSAR (default)"
+  echo "                   3: if mode 2 fails due to the incorrected result of topographic removal, use mode 3"
+  echo "threshold          a threshold used for checking the quality of the intef. (smoothed) (0.05 default)"
+  echo "Make sure the DEM folder only contains DEM and the par file"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+image_pairs=$1
+dirs=$(awk '{print $1}' $image_pairs)
+#dirs=$(awk '{print $1}' p_t)
+dirs=$(echo $dirs)	# get all in a line
+
+##### get input
+rm products.par
+echo "image_pairs:       $1" >> products.par
+echo "rlks:              $2" >> products.par
+echo "azlks:             $3" >> products.par
+echo "DEM:               $4" >> products.par
+echo "ref_slc:           $5" >> products.par
+echo "threshold:         $6" >> products.par
+##########
+
+rlks=$2
+azlks=$3
+#######################
+mode="2"
+if [ $# -ge 6 ]; then
+mode=$6
+fi
+#######################
+ref_slc=$5
+ref_slc_par=$ref_slc.rslc.par
+master_slc_par=$re_slaves/$ref_slc_par
+#######################
+qc_v="0.2"
+if [ $# -ge 7 ]; then
+qc_v=$7
+fi
+#######################
+
+work_path=`pwd`
+#get the project name
+#p_name=`du -s * | sort -nr | head -1 | awk '{print $2}'`
+#p_name=$(dirname `find */DEM_GEO` )
+p_name=$(dirname `find */DEM_GEO | head -1` )
+re_slaves=$work_path/$p_name/RE_SLAVES
+product=$work_path/$p_name/PRODUCT
+FIGURES=$work_path/$p_name/FIGURES
+qc=$work_path/$p_name/QC
+# Output directory for image pairs
+if [ ! -d $product ]; then
+  mkdir $product
+echo "${bn}: ***INFO***    workdir: $product created."
+fi
+
+if [ ! -d $qc ]; then
+  mkdir $qc
+echo "${bn}: ***INFO***    workdir: $qc created."
+fi
+dem_path=$work_path/$p_name/DEM_GEO
+
+DEM_GEO=$work_path/$p_name/DEM_GEO
+
+
+###################
+###DInSAR
+##########################
+
+cd $product
+for dir in $dirs
+do
+	
+	master=`echo $dir|cut -c1-8`	
+	slave=`echo $dir|cut -c10-17`
+	m_input=$re_slaves/$master.rslc
+	m_input_par=$re_slaves/$master.rslc.par
+	s_input=$re_slaves/$slave.rslc
+	s_input_par=$re_slaves/$slave.rslc.par
+        m_mli=$master.mli
+        m_mli_par=$m_mli.par
+	int_input=$dir.int   
+        int_input_par=$dir.off                             #interferogram file
+        dem_final=$DEM_GEO/$ref_slc.dem.final
+        diff_pass_2p=$dir.diff.2p.par
+        baseline=$dir.baseline
+        sim_topo_unw=$dir.sim.topo.unw
+subtracteddem=$dir.tflt
+sm_interf_ras=$FIGURES/$dir.tlft.filtered.bmp
+tflt_ras=$FIGURES/$dir.tflt.bmp
+coh_smoothed_ras=$FIGURES/$dir.tflt.sm.coh.bmp
+sm_interf_geo_ras=$FIGURES/$dir.filtered.geo.bmp
+lookup_table=$DEM_GEO/$ref_slc.rough_rdc
+lookup_tabke_final=$DEM_GEO/$ref_slc.lookup_tabke_final
+LOG=$dir.diff.log
+m_mli=$product/ave
+#   -------------------------------------------------------------------------------------------
+#   creat parameter files
+#   -------------------------------------------------------------------------------------------
+echo -ne "$dir\n0 0\n24 24\n128 128\n0.5\n" > diff_par_2p.in
+create_diff_par $int_input_par $int_input_par $diff_pass_2p < diff_par_2p.in
+rm -f diff_par_2p.in
+#   -------------------------------------------------------------------------------------------
+#   simulation of unwrapped topographic phase and phase subtraction
+#   -------------------------------------------------------------------------------------------
+# 
+width_mli=`awk '$1=="range_samples:" {print $2}' $m_mli_par`
+#echo "phase_sim $m_input_par $int_input_par $baseline $dem_final $sim_topo_unw 0 0"
+phase_sim $m_input_par $int_input_par $baseline $dem_final $sim_topo_unw 0 0 >> $LOG
+
+#phase_sim_orb $m_input_par $s_input_par $int_input_par  $dem_final $sim_topo_unw - -
+
+#rasrmg $sim_topo_unw - $width_mli 1 1 0 1 1 .33333 1. .35 .0 1 $sim_topo_unw.ras
+
+sub_phase $int_input $sim_topo_unw $diff_pass_2p $subtracteddem 1 >> $LOG
+
+
+adf $subtracteddem $subtracteddem.filtered0 $subtracteddem.cc0 $width_mli 0.4 16 7 8 0 0 0.25
+adf $subtracteddem.filtered0 $subtracteddem.filtered $subtracteddem.cc $width_mli 0.6 16 7 8 0 0 0.25
+rm $subtracteddem.filtered0 $subtracteddem.cc0
+rasmph_pwr $subtracteddem $m_mli $width_mli - - - - rmg.cm $tflt_ras - - 8
+rasmph_pwr $subtracteddem.filtered $m_mli $width_mli - - - - rmg.cm $sm_interf_ras - - 8
+rasdt_pwr $subtracteddem.cc $m_mli $width_mli - - - - - - 2 cc.cm $coh_smoothed_ras - - 8
+done
+rm -f *.int
+rm -f *.log
+rm -f *.unw
+rm *base.perp
+cd $product
+
+

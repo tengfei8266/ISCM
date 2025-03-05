@@ -1,0 +1,228 @@
+#!/bin/sh
+##########################################################
+# Script that:
+#       - resample SLC images 
+#       
+# Written by Lei Zhang, 02-03-2008
+# LSGI, The Hong Kong PolyU
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to resample the SLC images to a common reference SLC"
+echo   "03-28-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 4 ]; then
+  echo "usage: `basename $0` <images> <ref_SLC> <rlks> <azlks> [crop] [roff] [nr] [loff] [nl]"
+  echo ""
+  echo "input parameters:"
+  echo "images             1.the file containing names of the selected images"
+  echo "ref_SLC            2.the name of reference SLC (e.g. 19990909)"
+  echo "rlks               3.number of range looks for plotting the figure"
+  echo "azlks              4.number of azimuth looks for plotting the figure"
+  echo "crop               5.flag for indicating whether to crop ref_SLC (0: no (default);1:yes)"
+  echo "roff               6.offset to starting range sample (enter - for default: 0)"
+  echo "nr                 7.number of range samples (enter - for default: to end of line)"
+  echo "loff               8.offset to starting line (enter - for default: 0)"
+  echo "nl                 9.number of lines to copy (enter - for default: to end of file)"
+  echo ""
+  echo " "
+  exit 0
+fi
+########################################################################################################
+#get the input
+images=$1
+ref_SLC=$2
+rlks=$3
+azlks=$4
+crop=0
+if [ $# -ge 5 ]; then
+crop=$5
+fi
+
+###############################
+# SLC_data path
+work_path=`pwd`
+#get the project name
+#p_name=`du -s * | sort -nr | head -1 | awk '{print $2}'`
+#p_name=$(dirname `find */DEM_GEO` )
+p_name=$(dirname `find */DEM_GEO | head -1` )
+slc_data=$work_path/$p_name/SLC_DATA
+re_slaves=$work_path/$p_name/RE_SLAVES
+ref_slc=$slc_data/$ref_SLC.slc
+ref_par=$slc_data/$ref_SLC.slc.par
+
+
+### get the data type
+
+image_format=`awk '$1 == "image_format:" {print $2}' $ref_par`
+	     case $image_format in
+             SCOMPLEX)
+	     data_type="1"
+             fcase="4"              
+             ;;
+             FCOMPLEX)
+             data_type="0"  
+             fcase="1"     
+             ;;
+             esac  
+##############################
+if [ $crop -eq 1 ]; then
+roff=$6
+nr=$7
+loff=$8
+nl=$9
+SLC_copy $ref_slc $ref_par $ref_slc.crop $ref_par.crop $fcase - $roff $nr $loff $nl 
+ref_slc=$ref_slc.crop
+ref_par=$ref_par.crop
+width=`awk '$1 == "range_samples:" {print $2}' $ref_par`
+rasSLC $ref_slc $width 1 0 $rlks $azlks 1 .35 - $data_type 0 $slc_data/$ref_SLC.crop.bmp
+fi
+cp $ref_slc $work_path/$p_name/RE_SLAVES/$ref_SLC.rslc
+cp $ref_par $work_path/$p_name/RE_SLAVES/$ref_SLC.rslc.par
+
+# build the M-S tab
+rm -f master_all_slaves
+bn=`basename $0`
+dirs=$(awk '{print $1}' $images)
+dirs=$(echo $dirs)	# get all in a line
+#
+for dir in $dirs
+do
+if [ $dir -ne $ref_SLC ]; then	
+echo "$ref_SLC-"$dir >> master_all_slaves
+fi	
+
+done	
+
+dirs=$(awk '{print $1}' master_all_slaves)
+dirs=$(echo $dirs)	# get all in a line
+
+#cp $slc_data/$ref_SLC.crop.ras $re_slaves
+cd $work_path/$p_name/M_Ss
+mkdir -p $dirs
+for dir in $dirs
+do
+master=`echo $dir|cut -c1-8`	
+slave=`echo $dir|cut -c10-17`
+if [ ! -e $re_slaves/$slave.rslc ]; then	
+cd $dir
+	rm -f -r *
+
+	master=`echo $dir|cut -c1-8`	
+	slave=`echo $dir|cut -c10-17`
+	m_input=$ref_slc
+	m_input_par=$ref_par
+	s_input=$slc_data/$slave.slc
+	s_input_par=$slc_data/$slave.slc.par
+	off_par=$dir.off             #ISP offset/interferogram parameter file                 
+	offs=$dir.offs               #offset estimates (FCOMPLEX)                             
+	offsets=$dir.offsets         #range and azimuth offsets and ccp data in text format   
+	coffs=$dir.coffs             #culled range and azimuth offset estimates (fcomplex)    
+	coffsets=$dir.coffsets       #culled range and azimuth offset estimates (fcomplex)    
+	ccp=$dir.ccp                 #offset estimation ccp (FLOAT)                           
+	s_rslc=$re_slaves/$slave.rslc             #resampled slave                                         
+	s_rslc_par=$re_slaves/$slave.rslc.par    #par file of resampled slave                              
+	log=$dir.log
+rm -f $log  
+#########################################################################
+#-------------------------------------------------------------------------------------------
+#   The sizes and points for CC (Coarse Coregistration) and FC (Fine Coregistration)
+#   -------------------------------------------------------------------------------------------
+CC_WINSIZE_1_range="64" # the size of large windows for offset_pwr method
+CC_WINSIZE_1_azi="64"
+CC_WINSIZE_11_range="64"
+CC_WINSIZE_11_azi="64"
+
+cal_method="1"         # 1 for intensity cross-correlation;2 for fringe visibility
+multilook_1="1 1"      # the number of multilook (range, azimuth)
+raz_pos="- -"      # select a pixel for calculating the initial offsets (range, azimuth)
+n_ovr="1"                      # offset measurement oversampling factor
+range_m=`awk '$1 == "range_samples:" {print $2}' $m_input_par`
+azi_m=`awk '$1 == "azimuth_lines:" {print $2}' $m_input_par`
+n_raz_1_range="64"
+n_raz_1_azi="64"
+n_raz_11_range="128"
+n_raz_11_azi="128"
+#####################################################################################
+#n_raz="100 80"                     #number of offset estimates in range/pixel direction for CC
+thres_1="0.6"                   # threshold for method 1
+thres_11="0.6"                   # threshold for method 1
+#########################################################################################
+pflag="0"                       #print flag (0:print offset summary (default)  1:print all offset data)
+n_ovr_tracking="1"                      # offset measurement oversampling factor for tracking method
+razstep_tracking="- -"        #step in range/azimuth (enter - for default: rwin/2) for FC
+raz_startstop="- - - -"    #start ending pixel in range and azimuth
+npoly="6"                        #number of polynomial model parameters (1,2,3,4) 
+interact_flag="0"                  # interactive culling (1=Yes; 0=No)
+#   -------------------------------------------------------------------------------------------
+#   Get initial offsets in range and azimuth directions using oribtal info (~5pixels for ESA)
+#   -------------------------------------------------------------------------------------------
+
+#if [ ! -e $m_input.ovr ]; then
+#SLC_ovr $m_input $m_input_par $m_input.ovr $m_input_par.ovr 2
+#fi
+#SLC_ovr $s_input $s_input_par $s_input.ovr $s_input_par.ovr 2
+#m_input=$m_input.ovr
+#m_input_par=$m_input_par.ovr
+#s_input=$s_input.ovr
+#s_input_par=$s_input_par.ovr
+rm -f $off_par
+echo -e "$dir\n 0 0\n 64 64\n 16 16\\n 0.6\n\n\n" > create_offsets
+create_offset $m_input_par $s_input_par $off_par $cal_method $multilook_1 < create_offsets
+rm -f creat_offsets
+echo "----------------------------------------------------------------------------------------"
+echo                  "create_offset finished"
+echo "----------------------------------------------------------------------------------------"
+init_offset_orbit $m_input_par $s_input_par $off_par $raz_pos
+#   -------------------------------------------------------------------------------------------
+#   Get the offsets with sub-pixel precision
+#   -------------------------------------------------------------------------------------------
+# init_offset $m_input $s_input $m_input_par $s_input_par $off_par 1 1
+offset_pwr $m_input $s_input $m_input_par $s_input_par $off_par $offs $ccp $CC_WINSIZE_1_range $CC_WINSIZE_1_azi $offsets $n_ovr $n_raz_1_range $n_raz_1_azi $thres_1 5 
+echo "----------------------------------------------------------------------------------------"
+echo                  "offset_pwr finished(1st time with larger windowsize)80"
+echo "----------------------------------------------------------------------------------------"
+  offset_fit $offs $ccp $off_par $coffs $coffsets $thres_1 $npoly $interact_flag >> $log
+
+echo "----------------------------------------------------------------------------------------"
+echo                  "offset_fit finished (1st time)"
+echo "----------------------------------------------------------------------------------------"
+rm -f $offs $ccp $coffs $coffsets $offsets
+#offset_pwr $m_input $s_input $m_input_par $s_input_par $off_par $offs $ccp $CC_WINSIZE_11_range $CC_WINSIZE_11_azi $offsets $n_ovr $n_raz_11_range $n_raz_11_azi $thres_11 4 $pflag 0 >> $log
+echo "----------------------------------------------------------------------------------------"
+echo                  "offset_pwr finished(2nd time with smaller windowsize)"
+echo "----------------------------------------------------------------------------------------"
+ #offset_fit $offs $ccp $off_par $coffs $coffsets $thres_11 $npoly $interact_flag >> $log
+rm -f $offs $ccp $coffs $coffsets $offsets
+
+
+
+#   -------------------------------------------------------------------------------------------
+#   The parameters --resample
+#   -------------------------------------------------------------------------------------------
+#   -------------------------------------------------------------------------------------------
+#   the program used for resampling
+#   -------------------------------------------------------------------------------------------
+#   SLC_interp 
+#   example:
+#   SLC_interp <SLC-2> <SLC1_par> <SLC2_par>  <OFF_par> <SLC-2R> <SLC2R_par> [loff] [nlines]
+#   *******************************************************************************************
+SLC_interp $s_input $m_input_par $s_input_par $off_par $s_rslc $s_rslc_par
+width_resample=`awk '$1 == "range_samples:" {print $2}' $s_rslc_par`
+image_format=`awk '$1 == "image_format:" {print $2}' $s_rslc_par`
+	     case $image_format in
+             SCOMPLEX)
+	     data_type="1"              
+             ;;
+             FCOMPLEX)
+             data_type="0"       
+             ;;
+             esac     
+	
+	rasSLC $s_rslc $width_resample 1 0 $rlks $azlks 1 .35 - $data_type
+
+cd ..
+fi
+done	
+

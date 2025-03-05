@@ -1,0 +1,227 @@
+#!/bin/sh
+##########################################################
+# Script that:
+#       - generates the diff phases 
+#       
+# Written by Lei Zhang, 02-03-2008
+# LSGI, The Hong Kong PolyU
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to generate the interf. products"
+echo   "03-28-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 5 ]; then
+  echo "usage: `basename $0` <image_pairs> <rlks> <azlks> <DEM> <ref_slc> <mode> <threshold>"
+  echo ""
+  echo "input parameters:"
+  echo "image_pairs        the file containing names of the selected image pairs"
+  echo "rlks               number of range looks for plotting the figure"
+  echo "azlks              number of azimuth looks for plotting the figure"
+  echo "DEM                DEM (WGS84) path (make sure it only contains DEM and its par file)"
+  echo "ref_slc            the name of reference SLC"
+  echo "mode               processing mode"
+  echo "                   0: interferometry processing"
+  echo "                   1: geocode DEM to RDC system and generate the lookup table"
+  echo "                   2: perform 0 and 1 and two pass DInSAR (default)"
+  echo "                   3: if mode 2 fails due to the incorrected result of topographic removal, use mode 3"
+  echo "threshold          a threshold used for checking the quality of the intef. (smoothed) (0.05 default)"
+  echo "Make sure the DEM folder only contains DEM and the par file"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+image_pairs=$1
+dirs=$(awk '{print $1}' $image_pairs)
+#dirs=$(awk '{print $1}' p_t)
+dirs=$(echo $dirs)	# get all in a line
+
+##### get input
+rm products.par
+echo "image_pairs:       $1" >> products.par
+echo "rlks:              $2" >> products.par
+echo "azlks:             $3" >> products.par
+echo "DEM:               $4" >> products.par
+echo "ref_slc:           $5" >> products.par
+echo "threshold:         $6" >> products.par
+##########
+
+rlks=$2
+azlks=$3
+#######################
+mode="2"
+if [ $# -ge 6 ]; then
+mode=$6
+fi
+#######################
+
+#######################
+qc_v="0.2"
+if [ $# -ge 7 ]; then
+qc_v=$7
+fi
+#######################
+
+work_path=`pwd`
+#get the project name
+#p_name=`du -s * | sort -nr | head -1 | awk '{print $2}'`
+#p_name=$(dirname `find */DEM_GEO` )
+p_name=$(dirname `find */DEM_GEO | head -1` )
+re_slaves=$work_path/$p_name/RE_SLAVES
+product=$work_path/$p_name/PRODUCT
+FIGURES=$work_path/$p_name/FIGURES
+qc=$work_path/$p_name/QC
+# Output directory for image pairs
+if [ ! -d $product ]; then
+  mkdir $product
+echo "${bn}: ***INFO***    workdir: $product created."
+fi
+
+if [ ! -d $qc ]; then
+  mkdir $qc
+echo "${bn}: ***INFO***    workdir: $qc created."
+fi
+dem_path=$work_path/$p_name/DEM_GEO
+
+#####Reading the data####################################################################
+cd $product
+for dir in $dirs
+do
+	
+	master=`echo $dir|cut -c1-8`	
+	slave=`echo $dir|cut -c10-17`
+	m_input=$re_slaves/$master.rslc
+	m_input_par=$re_slaves/$master.rslc.par
+	s_input=$re_slaves/$slave.rslc             #resampled slave                                         
+	s_input_par=$re_slaves/$slave.rslc.par    #par file of resampled slave  
+	
+	s_rslc=$re_slaves/$slave.rrslc             #resampled slave                                         
+	s_rslc_par=$re_slaves/$slave.rrslc.par           
+	int=$dir.int                                #interferogram file
+	m_mli=$master.mli              #multilooked master file
+	m_mli_par=$master.mli.par        #par.file of multilooked master file
+	s_mli=$slave.mli              #multilooked slave file
+	s_mli_par=$slave.mli.par       #par.file of multilooked slave file
+	baseline=$dir.baseline       #baseline file
+	int_flat=$dir.int.flt      #flattened interferogram
+	coh=$dir.coh               #coherence file
+	int_sm=$dir.smooth          #filtered interferogram
+	coh_sm=$dir.coh.smooth          # coherence calculated from filtered interferogram
+	off_par=$dir.off
+        LOG=$dir.log
+        rm -f $LOG
+#   -------------------------------------------------------------------------------------------
+#   set the parameters for the interferogram, multilook, baseline, flattening
+#   -------------------------------------------------------------------------------------------
+	loff="0"          #offset to starting line relative to SLC-1 for interferogram (default=0)
+	nlines="-"        #number of SLC lines to process (default = to end of file)
+	sps_flg="0"       #range spectral shift flag  1: apply spectral shift filter (default)  0: do not apply spectral shift filter
+	azf_flg="0"       #zimuth common band filter flag:1: apply azimuth common band filter (default) 0: do not apply azimuth common band filter
+	rp1_2_flg="1 1"  #SLC-1/2 range phase mode 0: nearest approach (zero-Doppler) phase 1: ref. function center (Doppler centroid) (default)
+	baseline_method="0" 
+# 4 methods :
+#************************************************************************************************************************
+#Method flag  	Bpara estimation  	   Bperp estimation  	          required input
+#  0 	        from orbits 	           from orbits 	                  SLC-1_par,SLC-2_par
+#  1 	        from registration offsets  from registration offsets 	  SLC-1_par,SLC-2_par,OFF_par
+#  2 	        from orbits 	           fringe rate 	                  SLC-1_par,SLC-2_par,OFF_par,interferogram
+#  3 	        from registration offsets  fringe rate 	                  SLC-1_par,SLC-2_par,OFF_par,interferogram
+#  4 	        fringe rate 	           fringe rate 	                  SLC-1_par,OFF_par,interferogram
+#***********************************************************************************************************************
+	int_type="1"    #interferogram type: 0=unwrapped phase, 1=complex interf. (default=1)--flattening
+	inverse="0"      #subtract/add inversion flag (0=subtract phase ramp, 1=add phase ramp (default=0)
+	coh_win="3 3"    #coherence window size(azimuth/range)
+	wgt_flag="2"     #weighting function:
+                	 #0: constant (default)
+               		 #1: triangular
+               		 #2: gaussian
+               		 #3: none (phase only)
+#************************************************************************************************************************
+cal_method="1"         # 1 for intensity cross-correlation;2 for fringe visibility
+rm -f $off_par
+echo -e "$dir\\n 0 0\\n 32 32\\n 64 64\\n 7.0\\n\\n\\n" > create_offsetss
+create_offset $m_input_par $s_input_par $off_par $cal_method $rlks $azlks < create_offsetss
+#init_offset_orbit $m_input_par $s_input_par $off_par - -
+#init_offset $m_input $s_input $m_input_par $s_input_par $off_par 1 1
+#offset_pwr $m_input $s_input $m_input_par $s_input_par $off_par offs snr 512 512 offsets 2 64 64 8.0 4 0 >> $LOG
+echo "----------------------------------------------------------------------------------------"
+echo                  "offset_pwr finished(1st time with larger windowsize)80"
+echo "----------------------------------------------------------------------------------------"
+ # offset_fit offs snr $off_par coffs coffsets 8.0 4 0 >> $LOG
+
+echo "----------------------------------------------------------------------------------------"
+echo                  "offset_fit finished (1st time)"
+echo "----------------------------------------------------------------------------------------"
+rm -f $offs $snr $coffs $coffsets $offsets
+rm -f creat_offsetss
+#   -------------------------------------------------------------------------------------------
+#   the program used for interferogram,multilook
+#   -------------------------------------------------------------------------------------------
+#   SLC_intf; multi_look;base_orbit;base_est_fft;base_init
+#   example:
+#   SLC_intf <SLC-1> <SLC-2R> <SLC-1.par> <SLC-2R.par> <OFF_par> <interf> <rlks> <azlks> #   [loff] [nlines] [sps_flg] [azf_flg] [rp1_flg] [rp2_flg]
+#   multi_look <SLC> <SLC_par> <MLI> <MLI_par>  <rlks> <azlks> [lbegin] [nlines] [scale]
+#   base_orbit <SLC1_par> <SLC2_par>  <baseline_file>
+#   base_est_fft <interf> <SLC_par> <OFF_par>  <baseline> <nazfft> <r_samp> <az_line>
+#   base_init <SLC1_par> <SLC2_par> <OFF_par>  <int> <base> [mflag] [nrfft] [nazfft] [r_samp] [az_line]
+#   *******************************************************************************************
+if [ ! -e $int ];then
+echo "SLC_intf $m_input $s_input $m_input_par $s_input_par $off_par $int $rlks $azlks $loff $nlines $sps_flg $azf_flg $rp1_2_flg"
+
+      #  SLC_interp $s_input $m_input_par $s_input_par $off_par $s_rslc $s_rslc_par
+	SLC_intf $m_input $s_input $m_input_par $s_input_par $off_par $int $rlks $azlks $loff $nlines $sps_flg $azf_flg $rp1_2_flg >> $LOG
+       width_cc=`awk '$1 == "interferogram_width:" {print $2}' $off_par`
+   #    rasmph $int $width_cc
+fi
+if [ ! -e $m_mli ]; then 
+	echo "multi_look $m_input $m_input_par $m_mli $m_mli_par $rlks $azlks"
+	multi_look $m_input $m_input_par $m_mli $m_mli_par $rlks $azlks >> $LOG
+   width_cc=`awk '$1 == "interferogram_width:" {print $2}' $off_par`
+        raspwr $m_mli $width_cc 1 0 1 1 1. .35 gray.cm $master.mli.bmp
+       
+fi
+if [ ! -e $s_mli ]; then
+	echo "multi_look $s_input $s_input_par $s_mli $s_mli_par $rlks $azlks"
+	multi_look $s_input $s_input_par $s_mli $s_mli_par $rlks $azlks >> $LOG
+       raspwr $s_mli $width_cc 1 0 1 1 1. .35 gray.cm $slave.mli.bmp
+fi
+#   --------------------------------------------------------------------------------------------
+#   baseline calculation
+#   --------------------------------------------------------------------------------------------
+
+#echo "base_orbit $m_input_par $s_input_par $baseline >> $LOG"
+#base_init $m_input_par $s_input_par $off_par $int $baseline $baseline_method $n_r_az_fft $location_fftwin >> $LOG
+base_orbit $m_input_par $s_input_par $baseline >> $LOG
+base_perp $baseline $m_input_par $off_par > $dir.base.perp
+
+#echo "ph_slope_base $int $m_input_par $off_par $baseline $int_flat $int_type $inverse"
+ph_slope_base $int $m_input_par $off_par $baseline $int_flat $int_type $inverse >> $LOG
+
+width_cc=`awk '$1 == "interferogram_width:" {print $2}' $off_par`
+
+multilook_plot="1 1"
+#adf $int_flat $int_flat.1 $coh_sm $width_cc .8 8 7 1 0 0 .25
+#adf $int_flat.1 $int_flat.filter $coh_sm $width_cc 0.8 8 7 1 0 0 .25
+#rasdt_pwr $int $m_mli $width_cc - - $multilook_plot - - 1. 0.35 8 $dir.phase_ori.bmp 
+
+rasdt_pwr $int $m_mli $width_cc - - $multilook_plot - - 2 rmg.cm $dir.phase_ori.bmp - - 8
+
+#rasdt_pwr $int_flat $m_mli $width_cc - - $multilook_plot - - 1. 0.35 8 $FIGURES/$dir.phase_flattened.bmp 
+
+rasdt_pwr $int_flat $m_mli $width_cc - - $multilook_plot - - 2 rmg.cm $FIGURES/$dir.phase_flattened.bmp - - 8
+
+#rasdt_pwr $int_flat.filter $m_mli $width_cc 1 0 $multilook_plot 2 0.35 1 $FIGURES/$dir.phase_smoothed.ras 0
+#raspwr $m_mli $width_cc 1 0 1 1 1. .35 1 $master.ras
+#rasdt_pwr $int_sm $m_mli $width_cc 1 1 0 $multilook_plot 1 .35 1 $FIGURES/$dir.phase_smooth.ras
+#rascc $coh $m_mli $width_cc 1 1 0 $multilook_plot 0.01 0.99 1 0.35 1 $dir.coherence.ras
+#ras_linear $coh $width_cc 1 0 $multilook_plot 0.0 1.0 1 $dir.coh_gray.ras
+#ras_linear $coh_sm $width_cc 1 0 $multilook_plot 0.0 1.0 1 $dir.coh_smoothed.ras
+done
+
+ls *.mli > ave_mli
+ave_image ave_mli $width_cc ave 
+raspwr ave $width_cc 
+ 	
+cd $work_path
+

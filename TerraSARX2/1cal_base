@@ -1,0 +1,191 @@
+#!/bin/sh
+
+##########################################################
+# Script that:
+#       - calculates the baselines for all possible combinations 
+#       
+# Usage:
+#       
+#       1) put the data into the sub folders named like 20020212 (yyyymmdd format) respectively.
+#       2) run it
+#
+# Written by Lei Zhang, 02-03-2008
+# LSGI, The Hong Kong PolyU
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to claculate the baselines for all possible paris"
+echo   "03-15-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 1 ]; then
+  echo "usage: `basename $0` <data_path>  "
+  echo ""
+  echo "input parameters:"
+  echo "data_path          the folder containing the data to be processed"
+  echo "caculate_baseline_method   default is 0(tongji) or max Bp & Bt"
+  echo "max_Bp          the max Berp of interferometry"
+  echo "max_Bt       the max Bt of interferometry"
+  echo ""
+  echo "Make sure the data have been put into the sub folders named respectively."
+  echo "Make sure your SLC data are stored with the name of yyyymmdd!!"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+# get current dir
+work_path=`pwd`
+# set the output folder
+
+# get the data path list
+#orig_dirs=$(for file in $1/*
+#do
+#        [ -d $file ] && echo $file  # 
+#done)
+orig_dirs=`ls $1 | awk '{print $1}'`
+
+dirs=$(echo "$orig_dirs" | awk '{ dir[NR] = $0 }
+
+                END { for(i=1; i<NR; i++)
+                for(j=i+1; j<=NR; j++)
+                print dir[i] "-" dir[j]
+                }')
+cd $1
+for data in $orig_dirs
+do 
+   cd $data
+   image=$data.slc
+   par=$data.slc.par
+  # rm -f *.hdr
+  # rm -f *.SLC
+ #  rm -f *.par
+for file in `ls *`
+do
+case $file in
+	p*.slc.par)
+	     echo -n "input files are MSP processed data... "
+	     echo -n "Reading the data ..."
+	     par_MSP sensor.par p$data.slc.par $par
+             break
+             ;;
+          *.slc.par)
+	     echo -n "input files are slc files... "
+	     echo -n "Reading the data ..."
+	   
+             break
+             ;;
+	 LED*)
+	     echo -n "input files are PALSAR SLC data... "
+	     par_EORC_PALSAR LED* $par IMG-HH* $image
+	     rm -f *.SLC
+	     break
+	     ;;
+	IMG-HV*)
+             echo -n "input files are PALSAR SLC HV data... "
+             par_EORC_PALSAR LED* $par IMG-HV* $image
+	     rm -f *.SLC
+	     break
+	     ;;
+	 lea_01.001)
+	     echo -n "input files are ESA ERS SLC data... "
+	     echo -ne "$image" > creat_par 
+	     par_ESA_ERS lea_01.001 $par dat_01.001 $image < creat_par
+             rm -f creat_par
+	     sensor=`awk '$1 == "sensor:" {print $2}' $par`
+             case $sensor in
+             ERS1)
+	     DELFT_vec2 $par $O_DIR_ERS1                 
+             ;;
+             ERS2)
+             DELFT_vec2 $par $O_DIR_ERS2          
+             ;;
+             esac     
+	     rm -f *.SLC
+             break
+	     ;;
+	 AS*)
+	     echo -n "input files are ESA ASAR SLC data... "
+	     par_ASAR ASA_IMS*.N1 $data
+	     rm -f *VV.SLC
+	     mv -f *VV.SLC.par $par
+             #DELFT_vec2 $par $O_DIR_ENVI
+	     DORIS_vec $par DOR*
+             break
+	     ;;
+	 *.led)
+	     echo -n "input files are Radarsat SLC data... "
+	     par_RSAT_SLC *.led $par *.img $image
+	     rm -f *.SLC
+	     break
+	     ;;
+	 *.DAT)
+	     echo -n "input files are JERS SLC data... "
+	     par_NASDA_JERS *.DAT $data
+	     rm -f *.SLC 
+	     mv -f *.par $par
+	     break
+	     ;;
+esac
+
+done
+#   par_ASAR AS*.N1 $data
+ #  rm -f *.SLC 
+   #DELFT_vec2 *VV.SLC.par /home/leon/Orbits/Envisat/eigen-cg03c
+cd ..
+done
+
+cd $work_path
+data_path=$work_path/$1
+if [ ! -d $data_path ]; then
+data_path=$1
+fi
+
+rm -f baseline
+BASELINE=$work_path/baseline
+temp=$work_path/temp
+if [ -e $temp ]; then
+rm -r $temp
+fi
+mkdir $temp
+cd $temp
+mkdir $dirs
+
+for dir in $dirs
+
+do
+
+	cd $dir
+	
+	DIR=`pwd`
+	INTERF=${DIR##*/}
+	MASTER=`echo $INTERF|cut -c1-8`
+	SLAVE=`echo $INTERF|cut -c10-17`	
+	M_PAR=$data_path/$MASTER/$MASTER.slc.par     # master parameter file         #
+	S_PAR=$data_path/$SLAVE/$SLAVE.slc.par      # slave parameter file          #
+	BASE1=$INTERF.basep
+	base_orbit $M_PAR $S_PAR - | tee $BASE1
+	b_par=`awk '$2 == "parallel" {printf("%6d",$5)}' $BASE1`
+	b_perp=`awk -F[:] '$1 == "baseline perpendicular component (m)" {print $2}' $BASE1`
+	echo "$b_par"
+	echo "$b_perp"
+	#----------calcultae the temporal baseline
+	date1=$SLAVE
+	date2=$MASTER
+	date1_sec=`date --date="$date1" +%s`
+	date2_sec=`date --date="$date2" +%s`
+	date_sec=$(($date1_sec-$date2_sec))
+	temp_base=$(($date_sec/60/60/24))
+        
+	echo  "$INTERF  $b_par   $b_perp    $temp_base" >> $BASELINE
+	echo "----------------------------------------------------------------------------------------"
+	echo                  "end of reading master data" "${MASTER}"
+	echo                  "end of reading slave data" "${SLAVE}"
+	echo "----------------------------------------------------------------------------------------"
+      cd $temp
+done
+rm -r $temp
+cd $work_path
+rm  image_pairs
+#awk '{ print $1 }' baseline > image_pairs
+
+

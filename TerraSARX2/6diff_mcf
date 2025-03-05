@@ -1,0 +1,149 @@
+#!/bin/bash
+##########################################################
+# Script that:
+#       - generates the diff phases 
+#       
+# Written by Changjiang Yang, 02-24-2017
+# CSU, The Cetral South University
+#########################################################################################################
+
+##########################################################################################################
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+echo " `basename $0`: TCP-InSAR script to generate the interf. products"
+echo   "03-28-2008 by Lei Zhang @ HKPolyU"
+echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+if [ $# -lt 5 ]; then
+  echo "usage: `basename $0` <image_pairs> <rlks> <azlks> <DEM> <ref_slc> <mode> <threshold>"
+  echo ""
+  echo "input parameters:"
+  echo "image_pairs        the file containing names of the selected image pairs"
+  echo "rlks               number of range looks for plotting the figure"
+  echo "azlks              number of azimuth looks for plotting the figure"
+  echo "threshold          the mask of coherence"
+  echo "mode               phase unwrapping mode"
+  echo "                   0: filled triangulation"
+  echo "                   1: Delaunay triangulation"
+  echo "r_init             phase reference point range offset"
+  echo "az_init            phase reference point azimuth offset"
+  echo "                   2: perform 0 and 1 and two pass DInSAR (default)"
+  echo "threshold          a threshold used for checking the quality of the intef. (smoothed) (0.05 default)"
+  echo "Make sure the DEM folder only contains DEM and the par file"
+  echo " "
+  exit 0
+fi
+########################################################################################################
+image_pairs=$1
+dirs=$(awk '{print $1}' $image_pairs)
+#dirs=$(awk '{print $1}' p_t)
+dirs=$(echo $dirs)	# get all in a line
+
+##### get input
+rm products.par
+echo "image_pairs:       $1" >> products.par
+echo "rlks:              $2" >> products.par
+echo "azlks:             $3" >> products.par
+echo "threshold:         $4" >> products.par
+echo "mode:              $5" >> products.par
+echo "r_init:            $6" >> products.par
+echo "az_init:           $7" >> products.par
+##########
+
+rlks=$2
+azlks=$3
+threshold=$4
+#######################
+if [ $# -ge 5 ]; then
+mode=$5
+fi
+#######################
+#######################
+
+r_init="$6"
+
+az_init="$7"
+
+#######################
+
+work_path=`pwd`
+#get the project name
+#p_name=`du -s * | sort -nr | head -1 | awk '{print $2}'`
+#p_name=$(dirname `find */DEM_GEO` )
+p_name=$(dirname `find */DEM_GEO | head -1` )
+re_slaves=$work_path/$p_name/RE_SLAVES
+product=$work_path/$p_name/PRODUCT
+FIGURES=$work_path/$p_name/FIGURES
+mkdir $FIGURES/MASK
+mkdir $product/unw
+mkdir $FIGURES/unw
+qc=$work_path/$p_name/QC
+# Output directory for image pairs
+if [ ! -d $product ]; then
+  mkdir $product
+echo "${bn}: ***INFO***    workdir: $product created."
+fi
+
+#if [ ! -d $qc ]; then
+#  mkdir $qctri_mode   triangulation mode
+ #              0: filled triangular mesh (default)
+  #             1: Delaunay triangulation
+
+#echo "${bn}: ***INFO***    workdir: $qc created."
+#fi
+DEM_GEO_path=$work_path/$p_name/DEM_GEO
+
+###################
+###   mcf
+##########################
+
+cd $product
+for dir in $dirs
+do
+	
+	master=`echo $dir|cut -c1-8`	
+	slave=`echo $dir|cut -c10-17`
+	m_input=$re_slaves/$master.rslc
+	m_input_par=$re_slaves/$master.rslc.par
+	s_input=$re_slaves/$slave.rslc
+	s_input_par=$re_slaves/$slave.rslc.par
+        m_mli=$master.mli
+        m_mli_par=$m_mli.par
+	diff_int_input=$product/$dir.tflt.filtered   
+        int_input_par=$dir.off                             #interferogram file
+        coh=$product/$dir.tflt.cc
+        utm_dem_par=$DEM_GEO_path/*.cropped.par
+        lookup_table=$DEM_GEO/$ref_slc.rough_rdc
+        lookup_table_final=$DEM_GEO/$ref_slc.lookup_table_final
+        diff_mcf_unw=$product/unw/$dir.mcf.unw
+        diff_final_unw=$product/unw/$dir.final.unw1 
+        mask_ras=$FIGURES/MASK/$dir.mask1.bmp
+        unw_mcf_bmp=$FIGURES/unw/$dir.mcf.unw.bmp
+        unw_final_bmp=$FIGURES/unw/$dir.final.unw1.bmp
+
+width=`awk '$1 == "range_samples:" {print $2}' $m_mli_par`
+nl=`awk '$1 == "azimuth_lines:" {print $2}' $m_mli_par`
+
+width_new=`awk '$1 == "width:" {print $2}' $utm_dem_par` 
+nl_new=`awk '$1 == "nlines:" {print $2}' $utm_dem_par`
+
+
+
+############phase_unwrapp#########################################################################
+#rascc_mask $dir.diff_int.cc $master.mli $width 1 1 0 1  1 0.75 0.1 0.9 1.0 0.35 1 $dir.mask.ras
+rascc_mask $coh $m_mli $width 1 1 0 1  1 $threshold 0. 0.1 0.9 1.0 0.35 1 $mask_ras
+
+mcf $diff_int_input $coh $mask_ras $diff_mcf_unw $width $mode 0 0 - - 1 1 - $r_init $az_init 1
+#mcf $diff_int_input $coh $mask_ras $diff_mcf_unw $width $mode 0 0 - - 1 1 - 782 478 1
+rasdt_pwr $diff_mcf_unw $m_mli $width - - - - - - 2 rmg.cm $unw_mcf_bmp - - 8
+#rasdt_pwr $subtracteddem.cc $m_mli $width_mli 1 0 1 1 - - 0 cc.cm $coh_smoothed_ras 1.0 0.35 8
+##############################趋势项#####
+
+quad_fit $diff_mcf_unw $dir.diff.2p.par - - $mask_ras $dir.plot_data 0
+
+quad_sub $diff_mcf_unw $dir.diff.2p.par $diff_final_unw 0 0
+
+
+rasdt_pwr $diff_final_unw $m_mli $width - - - - - - 2 rmg.cm $unw_final_bmp - - 8
+
+done
+
+#dishgt $dir.UTM.disp_int $master.UTM.mli $width_new 1 1 0 .1
